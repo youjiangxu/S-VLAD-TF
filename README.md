@@ -1,0 +1,2 @@
+# S-VLAD-TF
+seqvlad
