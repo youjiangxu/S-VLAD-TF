@@ -59,6 +59,7 @@ def exe_test(sess, data, batch_size, hf, feature_shape,
 	total_data = len(data)
 	num_batch = int(math.ceil(total_data*1.0/batch_size))
 	total_acc = 0.0
+	total_loss = 0.0
 	for batch_idx in xrange(num_batch):
 		batch_data = data[batch_idx*batch_size:min((batch_idx+1)*batch_size,total_data)]
 		
@@ -66,18 +67,18 @@ def exe_test(sess, data, batch_size, hf, feature_shape,
 		[l, gw] = sess.run([loss, predicts],feed_dict={input_video:data_v, y:data_y})
 		batch_acc = np.sum(np.where(np.argmax(gw,axis=-1)==data_y,1,0))
 		total_acc+=batch_acc
+		total_loss += l
 		print('    batch_idx:%d/%d, loss:%.5f, acc:%.5f' %(batch_idx+1,num_batch,l,batch_acc*1.0/batch_size))
-		
+	total_loss = total_loss/num_batch
+	print('total_loss:%.5f' %total_loss)
 	total_acc=total_acc*1.0/total_data
-	return total_acc
+	return total_acc,total_loss
 
 
 def test_model(sess, data, batch_size,  
 	loss, predicts, input_video, y, test_output, split=1, modality='rgb'):
-	if modality=='rgb':
-		hf = h5py.File('/mnt/data3/xyj/data/hmdb/feature/test_split_'+str(split)+'_in5b_rgb_10crop.h5','r')
-	else:
-		hf = h5py.File('/mnt/data3/xyj/data/hmdb/feature/test_split_'+str(split)+'_in5b_flow_10crop.h5','r')
+	
+	hf = h5py.File('/mnt/data3/xyj/data/hmdb/feature/test_split_'+str(split)+'_in5b_'+str(modality)+'_10crop.h5','r')
 
 	total_acc = 0.0
 	total_data = len(data)
@@ -113,6 +114,7 @@ def test_model(sess, data, batch_size,
 
 
 def main(hf1,hf2,f_type,
+		model='seqvlad',
 		modality='rgb',
 		test=False,
 		test_output=None,
@@ -122,13 +124,11 @@ def main(hf1,hf2,f_type,
 		bidirectional=False,
 		reduction_dim=512,
 		activation = 'tanh',
-		centers_num = 32, kernel_size=1, capl=16, d_w2v=512, 
+		centers_num = 32, kernel_size=1, d_w2v=512, 
 		feature_shape=None,lr=0.01,
 		batch_size=64,total_epoch=100,
 		file=None,pretrained_model=None):
-	'''
-		capl: the length of caption
-	'''
+	
 
 	# Create vocabulary
 	train_data, test_data = DataUtil.get_data(split=int(split),file=file)
@@ -137,14 +137,32 @@ def main(hf1,hf2,f_type,
 
 	input_video = tf.placeholder(tf.float32, shape=(None,)+feature_shape,name='input_video')
 	y = tf.placeholder(tf.int32,shape=(None,))
-
-	attentionCaptionModel = SeqVladModel.SeqVladWithReduAttentionModel(input_video,
-								dropout=dropout,
-								reduction_dim=reduction_dim,
-								activation=activation,
-								centers_num=centers_num, 
-								filter_size=kernel_size)
-	train_predicts, test_predicts = attentionCaptionModel.build_model()
+	if model=='seqvlad':
+		actionModel = SeqVladModel.SeqVladWithReduModel(input_video,
+									dropout=dropout,
+									reduction_dim=reduction_dim,
+									activation=activation,
+									centers_num=centers_num, 
+									filter_size=kernel_size)
+	elif model=='netvlad':
+		actionModel = SeqVladModel.NetVladModel(input_video,
+									dropout=dropout,
+									reduction_dim=reduction_dim,
+									activation=activation,
+									centers_num=centers_num, 
+									filter_size=kernel_size)
+	elif model=='notshare':
+		actionModel = SeqVladModel.SeqVladWithReduNotShareModel(input_video,
+									dropout=dropout,
+									reduction_dim=reduction_dim,
+									activation=activation,
+									centers_num=centers_num, 
+									filter_size=kernel_size)
+	else:
+		assert model in ['seqvlad','netvlad','notshare']
+		exit()
+		
+	train_predicts, test_predicts = actionModel.build_model()
 	loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=y, logits=train_predicts)
 
 	
@@ -165,7 +183,7 @@ def main(hf1,hf2,f_type,
 		configure && runtime environment
 	'''
 	config = tf.ConfigProto()
-	config.gpu_options.per_process_gpu_memory_fraction = 0.5
+	config.gpu_options.per_process_gpu_memory_fraction = 0.6
 	# sess = tf.Session(config=tf.ConfigProto(log_device_placement=True))
 	config.log_device_placement=False
 
@@ -203,9 +221,9 @@ def main(hf1,hf2,f_type,
 				print('    --Train--, Loss: %.5f, .......Time:%.3f' %(total_loss,time.time()-tic))
 
 				tic = time.time()
-				total_acc = exe_test(sess, test_data, batch_size, hf2, feature_shape, 
+				total_acc, test_loss = exe_test(sess, test_data, batch_size, hf2, feature_shape, 
 											loss, test_predicts, input_video, y, modality=modality)
-				print('    --Test--, .......Time:%.3f, total_acc:%.5f' %(time.time()-tic,total_acc))
+				print('    --Test--, .......Time:%.3f, total_acc:%.5f, test_loss:%.5f' %(time.time()-tic,total_acc,test_loss))
 
 
 				
@@ -216,7 +234,7 @@ def main(hf1,hf2,f_type,
 					os.makedirs(export_path+'/model')
 					print('mkdir %s' %export_path+'/model')
 
-				save_path = saver.save(sess, export_path+'/model/'+'E'+str(epoch+1)+'_L'+str(total_loss)+'_A'+str(total_acc)+'.ckpt')
+				save_path = saver.save(sess, export_path+'/model/'+'E'+str(epoch+1)+'_TaL'+str(total_loss)+'_TeL'+str(test_loss)+'_A'+str(total_acc)+'.ckpt')
 				print("Model saved in file: %s" % save_path)
 		
 def parseArguments():
@@ -260,6 +278,9 @@ def parseArguments():
 	parser.add_argument('--split', type=str, default=1,
 							help='the split which to train or test')
 
+	parser.add_argument('--model',type=str,default='seqvlad',
+							help='netvlad, seqvlad, or notshare')
+
 	args = parser.parse_args()
 	return args
 
@@ -281,12 +302,13 @@ if __name__ == '__main__':
 
 	kernel_size = 3
 	
-	capl = 16
 	activation = 'tanh' ## can be one of 'tanh,softmax,relu,sigmoid'
 
 	test = args.test
 
 	split = args.split
+
+	assert args.model in ['seqvlad','netvlad','notshare']
 	'''
 	---------------------------------
 	'''
@@ -309,7 +331,7 @@ if __name__ == '__main__':
 		height = 7
 		width = 7
 		feature_shape = (timesteps_v,video_feature_dims,height,width)
-		f_type = 'split'+str(split)+'_seqvlad_'+feature+'_k'+str(kernel_size)+'_c'+str(centers_num)+'_redu'+str(reduction_dim)+'_d'+str(dropout)+'_'+str(args.modality)
+		f_type = 'softmax_split'+str(split)+'_'+args.model+'_'+feature+'_k'+str(kernel_size)+'_c'+str(centers_num)+'_redu'+str(reduction_dim)+'_d'+str(dropout)+'_'+str(args.modality)
 		# feature_path = '/home/xyj/usr/local/data/mvad/feature/mvad-google-in5b-'+str(timesteps_v)+'fpv.h5'
 		if step:
 			timesteps_v = 30
@@ -336,14 +358,12 @@ if __name__ == '__main__':
 		f_type = 'bi_'+ f_type
 	# feature_path = '/data/xyj/resnet152_pool5_f'+str(timesteps_v)+'.h5'
 	# feature_path = '/home/xyj/usr/local/data/youtube/in5b-'+str(timesteps_v)+'fpv.h5'
-
-	if args.modality=='rgb':
-		print(args.modality)
-		feature_path1 = '/mnt/data3/xyj/data/hmdb/feature/train_split_'+str(split)+'_in5b_rgb_10crop.h5'
-		feature_path2 = '/mnt/data3/xyj/data/hmdb/feature/test_split_'+str(split)+'_in5b_rgb_10crop.h5'
-	else:
-		feature_path1 = '/mnt/data3/xyj/data/hmdb/feature/train_split_'+str(split)+'_in5b_flow_10crop.h5'
-		feature_path2 = '/mnt/data3/xyj/data/hmdb/feature/test_split_'+str(split)+'_in5b_flow_10crop.h5'
+	modality = args.modality
+	assert modality in ['rgb','flow']
+	
+	feature_path1 = '/mnt/data3/xyj/data/hmdb/feature/train_split_'+str(split)+'_in5b_'+str(modality)+'_10crop.h5'
+	feature_path2 = '/mnt/data3/xyj/data/hmdb/feature/test_split_'+str(split)+'_in5b_'+str(modality)+'_10crop.h5'
+	
 
 	hf1 = h5py.File(feature_path1,'r')
 	hf2 = h5py.File(feature_path2,'r')
@@ -357,6 +377,7 @@ if __name__ == '__main__':
 		
 	
 	main(hf1,hf2,f_type,
+		model=args.model,
 		split=split,
 		modality=args.modality,
 		test=test,
@@ -368,7 +389,7 @@ if __name__ == '__main__':
 		activation=activation,
 		centers_num=centers_num, kernel_size=kernel_size,
 		feature_shape=feature_shape,lr=lr,
-		batch_size=256,total_epoch=epoch,
+		batch_size=128,total_epoch=epoch,
 		file='/mnt/data3/xyj/data/hmdb/gt/hmdb51.json',pretrained_model=pretrained_model)
 	
 

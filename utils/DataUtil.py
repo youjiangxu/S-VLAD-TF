@@ -48,7 +48,7 @@ def getOversamplingBatchVideoFeature(batch_data, hf, feature_shape, modality='rg
 	labels = np.zeros((batch_size,),dtype='int32')
 	for idx, vid in enumerate(batch_data):
 		if modality=='rgb':
-			temp = np.random.randint(0,40)
+			temp = np.random.randint(0,10)
 		else:
 			temp = np.random.randint(0,10)
 		feature = hf[vid[0]+'/'+str(temp)]
