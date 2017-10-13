@@ -24,6 +24,7 @@ class NetVladModel(object):
 		reduction_dim=512,
 		centers_num=16,
 		dropout=0.5,
+		redu_filter_size=3,
 		filter_size=1, stride=[1,1,1,1], pad='SAME', 
 		inner_activation='hard_sigmoid',activation='tanh',
 		return_sequences=True):
@@ -41,6 +42,7 @@ class NetVladModel(object):
 		self.dropout=dropout
 		self.centers_num = centers_num
 
+		self.redu_filter_size = redu_filter_size
 
 		self.inner_activation = inner_activation
 		self.activation = activation
@@ -53,13 +55,13 @@ class NetVladModel(object):
 		print('init_parameters ...')
 
 
-		self.redu_W = tf.get_variable("redu_W", shape=[3, 3, self.enc_in_shape[-1], self.reduction_dim], 
+		self.redu_W = tf.get_variable("redu_W", shape=[self.redu_filter_size, self.redu_filter_size, self.enc_in_shape[-1], self.reduction_dim], 
 										initializer=tf.contrib.layers.xavier_initializer())
 		self.redu_b = tf.get_variable("redu_b",initializer=tf.random_normal([self.reduction_dim],stddev=1./math.sqrt(self.reduction_dim)))
 
 		
 
-		self.W_e = tf.get_variable("W_e", shape=[3, 3, self.reduction_dim, self.centers_num], initializer=tf.contrib.layers.xavier_initializer())
+		self.W_e = tf.get_variable("W_e", shape=[self.filter_size, self.filter_size, self.reduction_dim, self.centers_num], initializer=tf.contrib.layers.xavier_initializer())
 		self.b_e = tf.get_variable("b_e",initializer=tf.random_normal([self.centers_num],stddev=1./math.sqrt(self.centers_num)))
 		self.centers = tf.get_variable("centers",[1, self.reduction_dim, self.centers_num],
 			initializer=tf.random_normal_initializer(stddev=1. / math.sqrt(self.enc_in_shape[-1])))
@@ -142,6 +144,7 @@ class SeqVladWithReduModel(object):
 		reduction_dim=512,
 		centers_num=16,
 		dropout=0.5,
+		redu_filter_size=3,
 		filter_size=1, stride=[1,1,1,1], pad='SAME', 
 		inner_activation='hard_sigmoid',activation='tanh',
 		return_sequences=True):
@@ -157,6 +160,7 @@ class SeqVladWithReduModel(object):
 		self.pad = pad
 
 		self.dropout=dropout
+		self.redu_filter_size=redu_filter_size
 		self.centers_num = centers_num
 
 
@@ -172,12 +176,12 @@ class SeqVladWithReduModel(object):
 		# encoder parameters
 		# print(self.enc_in_shape)
 
-		self.redu_W = tf.get_variable("redu_W", shape=[3, 3, self.enc_in_shape[-1], self.reduction_dim], 
+		self.redu_W = tf.get_variable("redu_W", shape=[self.redu_filter_size, self.redu_filter_size, self.enc_in_shape[-1], self.reduction_dim], 
 										initializer=tf.contrib.layers.xavier_initializer())
 		self.redu_b = tf.get_variable("redu_b",initializer=tf.random_normal([self.reduction_dim],stddev=1./math.sqrt(self.reduction_dim)))
 
 		
-		self.W_e = tf.get_variable("W_e", shape=[3, 3, self.reduction_dim, self.centers_num], initializer=tf.contrib.layers.xavier_initializer())
+		self.W_e = tf.get_variable("W_e", shape=[self.filter_size, self.filter_size, self.reduction_dim, self.centers_num], initializer=tf.contrib.layers.xavier_initializer())
 		self.b_e = tf.get_variable("b_e",initializer=tf.random_normal([self.centers_num],stddev=1./math.sqrt(self.centers_num)))
 		self.centers = tf.get_variable("centers",[1, self.reduction_dim, self.centers_num],
 			initializer=tf.random_normal_initializer(stddev=1. / math.sqrt(self.enc_in_shape[-1])))
@@ -276,7 +280,7 @@ class SeqVladWithReduModel(object):
 
 		assignment = tf.reshape(assignment,[-1,self.enc_in_shape[2]*self.enc_in_shape[3],self.centers_num])
 
-		assignment = tf.nn.softmax(assignment,dim=-1)
+		# assignment = tf.nn.softmax(assignment,dim=-1)
 
 		# for alpha * c
 		a_sum = tf.reduce_sum(assignment,-2,keep_dims=True)
@@ -325,6 +329,7 @@ class SeqVladWithReduNotShareModel(object):
 		reduction_dim=512,
 		centers_num=16,
 		dropout=0.5,
+		redu_filter_size=3,
 		filter_size=1, stride=[1,1,1,1], pad='SAME', 
 		inner_activation='hard_sigmoid',activation='tanh',
 		return_sequences=True):
@@ -342,6 +347,7 @@ class SeqVladWithReduNotShareModel(object):
 		self.dropout=dropout
 		self.centers_num = centers_num
 
+		self.redu_filter_size=redu_filter_size
 
 		self.inner_activation = inner_activation
 		self.activation = activation
@@ -354,12 +360,12 @@ class SeqVladWithReduNotShareModel(object):
 		# encoder parameters
 		# print(self.enc_in_shape)
 
-		self.redu_W = tf.get_variable("redu_W", shape=[3, 3, self.enc_in_shape[-1], self.reduction_dim], 
+		self.redu_W = tf.get_variable("redu_W", shape=[self.redu_filter_size, self.redu_filter_size, self.enc_in_shape[-1], self.reduction_dim], 
 										initializer=tf.contrib.layers.xavier_initializer())
 		self.redu_b = tf.get_variable("redu_b",initializer=tf.random_normal([self.reduction_dim],stddev=1./math.sqrt(self.reduction_dim)))
 
 		
-		self.W_e = tf.get_variable("W_e", shape=[3, 3, self.reduction_dim, 3*self.centers_num], initializer=tf.contrib.layers.xavier_initializer())
+		self.W_e = tf.get_variable("W_e", shape=[self.filter_size, self.filter_size, self.reduction_dim, 3*self.centers_num], initializer=tf.contrib.layers.xavier_initializer())
 		self.b_e = tf.get_variable("b_e",initializer=tf.random_normal([3*self.centers_num],stddev=1./math.sqrt(3*self.centers_num)))
 		self.centers = tf.get_variable("centers",[1, 1, 1, self.reduction_dim, self.centers_num],
 			initializer=tf.random_normal_initializer(stddev=1. / math.sqrt(self.enc_in_shape[-1])))

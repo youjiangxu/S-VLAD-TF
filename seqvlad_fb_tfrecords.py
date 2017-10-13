@@ -4,7 +4,7 @@ import h5py
 import math
 
 from utils import DataUtil
-from model import SeqVladModel 
+from model import SeqVladFBModel 
 
 # os.environ["CUDA_VISIBLE_DEVICES"]="0,1"
 
@@ -14,56 +14,72 @@ import time
 import json
 
 import argparse
-		
-def exe_train(sess, data, epoch, batch_size, hf, feature_shape, 
+	
+def decode_from_tfrecords(tfrecords_file, is_batch):
+	reader = tf.TFRecordReader()
+	_, serialized_example =reader.read(tfrecords_file) # return file name and file
+	features = tf.parse_single_example(serialized_example, features={
+			'label': tf.FixedLenFeature([], tf.int64),
+			'feature': tf.FixedLenFeature([], tf.string),
+		})
+	feature = tf.decode_raw(features['feature'], tf.float32)
+	feature = tf.reshape(feature, [10, 1024, 7 ,7])
+	label = tf.cast(features['label'], tf.int64)
+
+	isFlip = tf.random_uniform([], minval=0, maxval=2, dtype=tf.int32, seed=None, name=None)
+	feature = tf.cond(isFlip>0, lambda: tf.reverse(feature,axis=[0]), lambda: feature)
+
+	if is_batch:
+		batch_size = 128
+		min_after_dequeue = 256
+		num_threads = 8
+		capatity = min_after_dequeue + num_threads*batch_size
+		feature, label = tf.train.shuffle_batch([feature,label],
+			batch_size = batch_size,
+			num_threads = num_threads,
+			capacity = capatity,
+			min_after_dequeue = min_after_dequeue,
+			)
+
+	return feature, label
+
+def exe_train(sess, data, epoch, batch_size,  feature_shape, 
 	train, loss, input_video, y,
 	bidirectional=False, step=False,modality='rgb' ):
-	np.random.shuffle(data)
 
 	total_data = len(data)
 	num_batch = int(math.ceil(total_data/batch_size))+1
 
+	
 	total_loss = 0.0
+
+	
+		# while not coord.should_shop()
+		
 	for batch_idx in xrange(num_batch):
 
-		batch_data = data[batch_idx*batch_size:min((batch_idx+1)*batch_size,total_data)]
-		tic = time.time()		
-		data_v,data_y = DataUtil.getOversamplingBatchVideoFeature(batch_data,hf,(10,feature_shape[1],feature_shape[2],feature_shape[3]),modality=modality)
+		# batch_data = data[batch_idx*batch_size:min((batch_idx+1)*batch_size,total_data)]
+		# tic = time.time()		
+		# data_v,data_y = DataUtil.getOversamplingBatchVideoFeature(batch_data,hf,(10,feature_shape[1],feature_shape[2],feature_shape[3]),modality=modality)
 
-		if bidirectional:
-			flag = np.random.randint(0,2)
-			if flag==1:
-				data_v = data_v[:,::-1]
-		data_time = time.time()-tic
+		# if bidirectional:
+		# 	flag = np.random.randint(0,2)
+		# 	if flag==1:
+		# 		data_v = data_v[:,::-1]
+		# data_time = time.time()-tic
 		tic = time.time()
 		# print('data_v mean:', np.mean(data_v),' std:', np.std(data_v))
-		_, l = sess.run([train,loss],feed_dict={input_video:data_v, y:data_y})
+		_, l, labels = sess.run([train,loss,y])
+		# print labels
 		run_time = time.time()-tic
 		total_loss += l
-		print('    batch_idx:%d/%d, loss:%.5f, data_time:%.3f, run_time:%.3f' %(batch_idx+1,num_batch,l,data_time,run_time))
+		print('    batch_idx:%d/%d, loss:%.5f, run_time:%.3f' %(batch_idx+1,num_batch,l, run_time))
 	total_loss = total_loss/num_batch
+	
+
+
 	return total_loss
 
-def exe_test(sess, data, batch_size, hf, feature_shape, 
-	loss, predicts, input_video, y, modality='rgb'):
-	
-	total_data = len(data)
-	num_batch = int(math.ceil(total_data*1.0/batch_size))
-	total_acc = 0.0
-	total_loss = 0.0
-	for batch_idx in xrange(num_batch):
-		batch_data = data[batch_idx*batch_size:min((batch_idx+1)*batch_size,total_data)]
-		
-		data_v,data_y = DataUtil.getTestBatchVideoFeature(batch_data,hf,(10,feature_shape[1],feature_shape[2],feature_shape[3]))
-		[l, gw] = sess.run([loss, predicts],feed_dict={input_video:data_v, y:data_y})
-		batch_acc = np.sum(np.where(np.argmax(gw,axis=-1)==data_y,1,0))
-		total_acc+=batch_acc
-		total_loss += l
-		print('    batch_idx:%d/%d, loss:%.5f, acc:%.5f' %(batch_idx+1,num_batch,l,batch_acc*1.0/batch_size))
-	total_loss = total_loss/num_batch
-	print('total_loss:%.5f' %total_loss)
-	total_acc=total_acc*1.0/total_data
-	return total_acc,total_loss
 
 
 def test_model(sess, data, hf, batch_size,  
@@ -100,7 +116,7 @@ def test_model(sess, data, hf, batch_size,
 	return total_acc
 
 
-def main(hf1,hf2,f_type,
+def main(hf2,f_type,
 		redu_filter_size = 3,
 		feature='google',
 		model='seqvlad',
@@ -123,45 +139,60 @@ def main(hf1,hf2,f_type,
 	train_data, test_data = DataUtil.get_data(split=int(split),file=file)
 
 	print('building model ...')
+	
 
-	input_video = tf.placeholder(tf.float32, shape=(None,)+feature_shape,name='input_video')
-	y = tf.placeholder(tf.int32,shape=(None,))
-	if model=='seqvlad':
-		actionModel = SeqVladModel.SeqVladWithReduModel(input_video,
-									num_class=101,
-									redu_filter_size = args.redu_filter_size,
-									dropout=dropout,
-									reduction_dim=reduction_dim,
-									activation=activation,
-									centers_num=centers_num, 
-									filter_size=kernel_size)
-	elif model=='netvlad':
-		actionModel = SeqVladModel.NetVladModel(input_video,
-									num_class=101,
-									redu_filter_size = args.redu_filter_size,
-									dropout=dropout,
-									reduction_dim=reduction_dim,
-									activation=activation,
-									centers_num=centers_num, 
-									filter_size=kernel_size)
-	elif model=='notshare':
-		actionModel = SeqVladModel.SeqVladWithReduNotShareModel(input_video,
-									num_class=101,
-									redu_filter_size = args.redu_filter_size,
-									dropout=dropout,
-									reduction_dim=reduction_dim,
-									activation=activation,
-									centers_num=centers_num, 
-									filter_size=kernel_size)
+	if test:
+		input_video = tf.placeholder(tf.float32, shape=(None,)+feature_shape,name='input_video')
+		y = tf.placeholder(tf.int32,shape=(None,))
+		
 	else:
-		assert model in ['seqvlad','netvlad','notshare']
+		output_path = '/mnt/data3/xyj/data/hmdb51/tfrecord_feature/split'+str(split)+'_'+str(modality)+'_train.tfrecord'
+		tfrecords_file_queue = tf.train.string_input_producer([output_path], num_epochs=None)
+		input_video, y = decode_from_tfrecords(tfrecords_file_queue, is_batch=True)
+		
+
+	if model=='seqvlad_fb_v1':
+		actionModel = SeqVladFBModel.SeqVladFBModel_v1(input_video,
+									num_class=51,
+									redu_filter_size = args.redu_filter_size,
+									dropout=dropout,
+									reduction_dim=reduction_dim,
+									activation=activation,
+									centers_num=centers_num, 
+									filter_size=kernel_size)
+	elif model=='seqvlad_fb_v2':
+		actionModel = SeqVladFBModel.SeqVladFBModel_v2(input_video,
+									num_class=51,
+									redu_filter_size = args.redu_filter_size,
+									dropout=dropout,
+									reduction_dim=reduction_dim,
+									activation=activation,
+									centers_num=centers_num, 
+									filter_size=kernel_size)
+	elif model=='seqvlad_fb_v3':
+		actionModel = SeqVladFBModel.SeqVladFBModel_v3(input_video,
+									num_class=51,
+									redu_filter_size = args.redu_filter_size,
+									dropout=dropout,
+									reduction_dim=reduction_dim,
+									activation=activation,
+									centers_num=centers_num, 
+									filter_size=kernel_size)
+	
+	else:
+		# assert model in ['seqvlad','netvlad','notshare']
+		assert model in ['seqvlad_fb_v1','seqvlad_fb_v2','seqvlad_fb_v3']
+
 		exit()
 		
 	train_predicts, test_predicts = actionModel.build_model()
 	loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=y, logits=train_predicts)
 
-	
-	loss = tf.reduce_mean(loss)+sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
+	print('regularized parameters:')
+	vars = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
+	for var in vars:
+		print var.name
+	loss = tf.reduce_mean(loss) #+ 0.0001*tf.nn.l2_loss(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
 
 	optimizer = tf.train.AdamOptimizer(learning_rate=lr,beta1=0.9,beta2=0.999,epsilon=1e-08,use_locking=False,name='Adam')
 	# optimizer = tf.train.GradientDescentOptimizer(learning_rate=lr,name='sgd')
@@ -190,7 +221,7 @@ def main(hf1,hf2,f_type,
 	'''
 		tensorboard configure
 	'''
-	export_path = '/home/xyj/usr/local/saved_model/ucf101/'+f_type+'/'+'lr'+str(lr)+'_f'+str(feature_shape[0])+'_B'+str(batch_size)
+	export_path = '/home/xyj/usr/local/saved_model/'+str(model)+'_hmdb51/'+f_type+'/'+'lr'+str(lr)+'_f'+str(feature_shape[0])+'_B'+str(batch_size)
 
 	with sess.as_default():
 		saver = tf.train.Saver(sharded=True,max_to_keep=total_epoch)
@@ -198,39 +229,51 @@ def main(hf1,hf2,f_type,
 			saver.restore(sess, pretrained_model)
 			print('restore pre trained file:' + pretrained_model)
 
-		if test:
-			tic = time.time()
-			total_acc = test_model(sess, test_data, hf2, batch_size,
-										loss, test_predicts, input_video, y, test_output, )
-			print('    --Test--, .......Time:%.3f, total_acc:%.5f' %(time.time()-tic,total_acc))
-		else:
 
-			for epoch in xrange(total_epoch):
-				# # shuffle
-				print('Epoch: %d/%d, Batch_size: %d' %(epoch+1,total_epoch,batch_size))
-				# # train phase
+		coord = tf.train.Coordinator()
+		threads = tf.train.start_queue_runners(coord=coord)
+		try:
+			if test:
 				tic = time.time()
-				total_loss = exe_train(sess, train_data, epoch, batch_size, hf1, feature_shape, train, loss, input_video, y, 
-					 bidirectional=bidirectional, step=step, modality=modality)
-
-				print('    --Train--, Loss: %.5f, .......Time:%.3f' %(total_loss,time.time()-tic))
-
-				tic = time.time()
-				total_acc, test_loss = exe_test(sess, test_data, batch_size, hf2, feature_shape, 
-											loss, test_predicts, input_video, y, modality=modality)
-				print('    --Test--, .......Time:%.3f, total_acc:%.5f, test_loss:%.5f' %(time.time()-tic,total_acc,test_loss))
-
+				total_acc = test_model(sess, test_data, hf2, batch_size,
+											loss, test_predicts, input_video, y, test_output, )
+				print('    --Test--, .......Time:%.3f, total_acc:%.5f' %(time.time()-tic,total_acc))
+			else:
 
 				
+				for epoch in xrange(total_epoch):
+					# # shuffle
+					print('Epoch: %d/%d, Batch_size: %d' %(epoch+1,total_epoch,batch_size))
+					# # train phase
+					tic = time.time()
+					total_loss = exe_train(sess, train_data, epoch, batch_size, feature_shape, train, loss, input_video, y, 
+						 bidirectional=bidirectional, step=step, modality=modality)
 
-				#save model
-				
-				if not os.path.exists(export_path+'/model'):
-					os.makedirs(export_path+'/model')
-					print('mkdir %s' %export_path+'/model')
+					print('    --Train--, Loss: %.5f, .......Time:%.3f' %(total_loss,time.time()-tic))
 
-				save_path = saver.save(sess, export_path+'/model/'+'E'+str(epoch+1)+'_TaL'+str(total_loss)+'_TeL'+str(test_loss)+'_A'+str(total_acc)+'.ckpt')
-				print("Model saved in file: %s" % save_path)
+					# tic = time.time()
+					# total_acc, test_loss = exe_test(sess, test_data, batch_size, hf2, feature_shape, 
+					# 							loss, test_predicts, input_video, y, modality=modality)
+					# print('    --Test--, .......Time:%.3f, total_acc:%.5f, test_loss:%.5f' %(time.time()-tic,total_acc,test_loss))
+
+
+					
+
+					#save model
+					
+					if not os.path.exists(export_path+'/model'):
+						os.makedirs(export_path+'/model')
+						print('mkdir %s' %export_path+'/model')
+
+					save_path = saver.save(sess, export_path+'/model/'+'E'+str(epoch+1)+'_TaL'+str(total_loss)+'.ckpt')
+					print("Model saved in file: %s" % save_path)
+		except tf.errors.OutOfRangeError:
+			print('Done reading')
+		finally:
+			coord.request_stop()
+
+		coord.request_stop()
+		coord.join(threads)
 		
 def parseArguments():
 	parser = argparse.ArgumentParser(description='seqvlad, youtube, video captioning, reduction app')
@@ -280,7 +323,7 @@ def parseArguments():
 	parser.add_argument('--split', type=str, default=1,
 							help='the split which to train or test')
 
-	parser.add_argument('--model',type=str,default='seqvlad',
+	parser.add_argument('--model',type=str,default='seqvlad_fb_v1',
 							help='netvlad, seqvlad, or notshare')
 
 
@@ -312,7 +355,7 @@ if __name__ == '__main__':
 
 	split = args.split
 
-	assert args.model in ['seqvlad','netvlad','notshare']
+	assert args.model in ['seqvlad_fb_v1','seqvlad_fb_v2','seqvlad_fb_v3']
 	assert args.dataset in ['hmdb51','ucf101']
 	if feature=='google':
 		video_feature_dims = 1024
@@ -324,20 +367,9 @@ if __name__ == '__main__':
 		+'_'+feature+'_k'+str(kernel_size)+'_c'+str(centers_num) \
 		+'_redu'+str(reduction_dim)+'_d'+str(dropout)+'_'+str(args.modality)+'_rfs'+str(args.redu_filter_size)
 		# feature_path = '/home/xyj/usr/local/data/mvad/feature/mvad-google-in5b-'+str(timesteps_v)+'fpv.h5'
-	elif feature=='vgg':
-		print('not used...')
-		exit()
-		video_feature_dims = 512
-		timesteps_v = 10 # sequences length for video
-		height = 14
-		width = 14
-		feature_shape = (timesteps_v,video_feature_dims,height,width)
-		f_type = 'split'+str(split)+'_'+args.model \
-		+'_'+feature+'_k'+str(kernel_size)+'_c'+str(centers_num) \
-		+'_redu'+str(reduction_dim)+'_d'+str(dropout)+'_'+str(args.modality)+'_rfs'+str(args.redu_filter_size)
-		# feature_path = '/home/xyj/usr/local/data/mvad/feature/mvad-google-in5b-'+str(timesteps_v)+'fpv.h5'
+	
 	else:
-		assert feature in ['google','vgg']
+		assert feature in ['google']
 		exit()
 	
 	if step:
@@ -350,14 +382,11 @@ if __name__ == '__main__':
 	modality = args.modality
 	assert modality in ['rgb','flow']
 	gt_file = '/mnt/data3/xyj/data/'+args.dataset+'/gt/'+args.dataset+'.json'
-	if feature=='google':
-		feature_path1 = '/mnt/data2/xyj/data/'+args.dataset+'/feature/train_split_'+str(split)+'_in5b_'+str(modality)+'_10crop.h5'
-		feature_path2 = '/mnt/data2/xyj/data/'+args.dataset+'/feature/test_split_'+str(split)+'_in5b_'+str(modality)+'_10crop.h5'
-	elif feature=='vgg':
-		feature_path1 = '/mnt/data3/xyj/data/'+args.dataset+'/feature/vgg_train_split_'+str(split)+'_in5b_'+str(modality)+'_10crop.h5'
-		feature_path2 = '/mnt/data3/xyj/data/'+args.dataset+'/feature/vgg_test_split_'+str(split)+'_in5b_'+str(modality)+'_10crop.h5'
-
-	hf1 = h5py.File(feature_path1,'r')
+	
+	# feature_path1 = '/mnt/data3/xyj/data/'+args.dataset+'/feature/train_split_'+str(split)+'_in5b_'+str(modality)+'_10crop.h5'
+	feature_path2 = '/mnt/data3/xyj/data/'+args.dataset+'/feature/test_split_'+str(split)+'_in5b_'+str(modality)+'_10crop.h5'
+	
+	# hf1 = h5py.File(feature_path1,'r')
 	hf2 = h5py.File(feature_path2,'r')
 
 	pretrained_model = args.pretrained_model
@@ -368,7 +397,7 @@ if __name__ == '__main__':
 		
 		
 	
-	main(hf1,hf2,f_type,
+	main(hf2,f_type,
 		feature=feature,
 		redu_filter_size = args.redu_filter_size,
 		model=args.model,

@@ -4,7 +4,7 @@ import h5py
 import math
 
 from utils import DataUtil
-from model import SeqVladModel 
+from model import SeqVladFBModel 
 
 # os.environ["CUDA_VISIBLE_DEVICES"]="0,1"
 
@@ -126,42 +126,62 @@ def main(hf1,hf2,f_type,
 
 	input_video = tf.placeholder(tf.float32, shape=(None,)+feature_shape,name='input_video')
 	y = tf.placeholder(tf.int32,shape=(None,))
-	if model=='seqvlad':
-		actionModel = SeqVladModel.SeqVladWithReduModel(input_video,
-									num_class=101,
+	if model=='seqvlad_fb_v1':
+		actionModel = SeqVladFBModel.SeqVladFBModel_v1(input_video,
+									num_class=51,
 									redu_filter_size = args.redu_filter_size,
 									dropout=dropout,
 									reduction_dim=reduction_dim,
 									activation=activation,
 									centers_num=centers_num, 
 									filter_size=kernel_size)
-	elif model=='netvlad':
-		actionModel = SeqVladModel.NetVladModel(input_video,
-									num_class=101,
+	elif model=='seqvlad_fb_v2':
+		actionModel = SeqVladFBModel.SeqVladFBModel_v2(input_video,
+									num_class=51,
 									redu_filter_size = args.redu_filter_size,
 									dropout=dropout,
 									reduction_dim=reduction_dim,
 									activation=activation,
 									centers_num=centers_num, 
 									filter_size=kernel_size)
-	elif model=='notshare':
-		actionModel = SeqVladModel.SeqVladWithReduNotShareModel(input_video,
-									num_class=101,
+	elif model=='seqvlad_fb_v3':
+		actionModel = SeqVladFBModel.SeqVladFBModel_v3(input_video,
+									num_class=51,
 									redu_filter_size = args.redu_filter_size,
 									dropout=dropout,
 									reduction_dim=reduction_dim,
 									activation=activation,
 									centers_num=centers_num, 
 									filter_size=kernel_size)
+	# elif model=='netvlad':
+	# 	actionModel = SeqVladFBModel.NetVladModel(input_video,
+	# 								num_class=101,
+	# 								redu_filter_size = args.redu_filter_size,
+	# 								dropout=dropout,
+	# 								reduction_dim=reduction_dim,
+	# 								activation=activation,
+	# 								centers_num=centers_num, 
+	# 								filter_size=kernel_size)
+	# elif model=='notshare':
+	# 	actionModel = SeqVladFBModel.SeqVladWithReduNotShareModel(input_video,
+	# 								num_class=101,
+	# 								redu_filter_size = args.redu_filter_size,
+	# 								dropout=dropout,
+	# 								reduction_dim=reduction_dim,
+	# 								activation=activation,
+	# 								centers_num=centers_num, 
+	# 								filter_size=kernel_size)
 	else:
-		assert model in ['seqvlad','netvlad','notshare']
+		# assert model in ['seqvlad','netvlad','notshare']
+		assert model in ['seqvlad_fb_v1','seqvlad_fb_v2','seqvlad_fb_v3']
+
 		exit()
 		
 	train_predicts, test_predicts = actionModel.build_model()
 	loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=y, logits=train_predicts)
 
-	
-	loss = tf.reduce_mean(loss)+sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
+
+	loss = tf.reduce_mean(loss)#+sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
 
 	optimizer = tf.train.AdamOptimizer(learning_rate=lr,beta1=0.9,beta2=0.999,epsilon=1e-08,use_locking=False,name='Adam')
 	# optimizer = tf.train.GradientDescentOptimizer(learning_rate=lr,name='sgd')
@@ -190,7 +210,7 @@ def main(hf1,hf2,f_type,
 	'''
 		tensorboard configure
 	'''
-	export_path = '/home/xyj/usr/local/saved_model/ucf101/'+f_type+'/'+'lr'+str(lr)+'_f'+str(feature_shape[0])+'_B'+str(batch_size)
+	export_path = '/home/xyj/usr/local/saved_model/'+str(model)+'_hmdb51/'+f_type+'/'+'lr'+str(lr)+'_f'+str(feature_shape[0])+'_B'+str(batch_size)
 
 	with sess.as_default():
 		saver = tf.train.Saver(sharded=True,max_to_keep=total_epoch)
@@ -280,7 +300,7 @@ def parseArguments():
 	parser.add_argument('--split', type=str, default=1,
 							help='the split which to train or test')
 
-	parser.add_argument('--model',type=str,default='seqvlad',
+	parser.add_argument('--model',type=str,default='seqvlad_fb_v1',
 							help='netvlad, seqvlad, or notshare')
 
 
@@ -312,7 +332,7 @@ if __name__ == '__main__':
 
 	split = args.split
 
-	assert args.model in ['seqvlad','netvlad','notshare']
+	assert args.model in ['seqvlad_fb_v1','seqvlad_fb_v2','seqvlad_fb_v3']
 	assert args.dataset in ['hmdb51','ucf101']
 	if feature=='google':
 		video_feature_dims = 1024
@@ -351,8 +371,8 @@ if __name__ == '__main__':
 	assert modality in ['rgb','flow']
 	gt_file = '/mnt/data3/xyj/data/'+args.dataset+'/gt/'+args.dataset+'.json'
 	if feature=='google':
-		feature_path1 = '/mnt/data2/xyj/data/'+args.dataset+'/feature/train_split_'+str(split)+'_in5b_'+str(modality)+'_10crop.h5'
-		feature_path2 = '/mnt/data2/xyj/data/'+args.dataset+'/feature/test_split_'+str(split)+'_in5b_'+str(modality)+'_10crop.h5'
+		feature_path1 = '/mnt/data3/xyj/data/'+args.dataset+'/feature/train_split_'+str(split)+'_in5b_'+str(modality)+'_10crop.h5'
+		feature_path2 = '/mnt/data3/xyj/data/'+args.dataset+'/feature/test_split_'+str(split)+'_in5b_'+str(modality)+'_10crop.h5'
 	elif feature=='vgg':
 		feature_path1 = '/mnt/data3/xyj/data/'+args.dataset+'/feature/vgg_train_split_'+str(split)+'_in5b_'+str(modality)+'_10crop.h5'
 		feature_path2 = '/mnt/data3/xyj/data/'+args.dataset+'/feature/vgg_test_split_'+str(split)+'_in5b_'+str(modality)+'_10crop.h5'
